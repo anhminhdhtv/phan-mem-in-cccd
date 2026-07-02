@@ -122,6 +122,10 @@ while ($listener.IsListening) {
             $fileToServe = Join-Path $PSScriptRoot "app.js"
             $contentType = "application/javascript; charset=utf-8"
         }
+        elseif ($path -eq "/opencv.js") {
+            $fileToServe = Join-Path $PSScriptRoot "opencv.js"
+            $contentType = "application/javascript; charset=utf-8"
+        }
         elseif ($path -eq "/sample_front.png") {
             $fileToServe = Join-Path $PSScriptRoot "sample_front.png"
             $contentType = "image/png"

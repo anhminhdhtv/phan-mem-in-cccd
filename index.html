@@ -39,7 +39,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
   
   <!-- OpenCV.js CDN for Auto Perspective Crop -->
-  <script async src="https://docs.opencv.org/4.7.0/opencv.js" type="text/javascript"></script>
+  <script async src="opencv.js" type="text/javascript"></script>
   
   <!-- Custom Styles -->
   <link rel="stylesheet" href="styles.css">
@@ -80,7 +80,7 @@
         </a>
       </div>
     </header>
-        <!-- Main Workspace Grid -->
+    <!-- Main Workspace Grid -->
     <main class="flex-1 workspace-grid gap-6 p-4 z-10">
       
       <!-- Left Sidebar: Configuration Panel -->
@@ -102,26 +102,49 @@
           </div>
         </div>
 
+        <!-- Quick duplicate tools -->
+        <div class="glass-panel p-5 flex flex-col gap-4">
+          <h2 class="text-base font-semibold border-b border-slate-700/50 pb-2 mb-2 text-white flex items-center gap-2">
+            <i class="fa-solid fa-clone text-indigo-400"></i> Nhân Bản Nhanh
+          </h2>
+          
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            Hỗ trợ in nhiều bản của cùng một CCCD mà không cần chỉnh sửa nhiều lần.
+          </p>
+          
+          <div class="flex flex-col gap-3">
+            <button id="duplicatePair1Btn" class="w-full bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/30 hover:border-indigo-500/60 text-indigo-300 hover:text-white transition-all text-xs font-bold py-2.5 px-3 rounded-lg flex items-center justify-center gap-2">
+              <i class="fa-solid fa-copy"></i> Nhân bản Cặp #1 ra các ô khác
+            </button>
+            
+            <div class="flex items-center gap-2 mt-1">
+              <input type="checkbox" id="syncPair1Checkbox" class="rounded border-slate-800 bg-slate-900 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer">
+              <label for="syncPair1Checkbox" class="text-xs font-medium text-slate-300 cursor-pointer select-none">Tự động đồng bộ Cặp #1</label>
+            </div>
+          </div>
+        </div>
+
+
         <!-- System Controls -->
         <div class="flex flex-col gap-2">
           <button id="exportWordBtn" class="btn-gradient w-full py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 text-base">
             <i class="fa-solid fa-file-word text-xl"></i>
             Xuất File Word (.docx)
           </button>
+
+          <button id="printBtn" class="w-full py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 text-base text-white font-semibold transition-all hover:translate-y-[-2px] active:translate-y-[0]" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);">
+            <i class="fa-solid fa-print text-xl"></i>
+            In trực tiếp (Ctrl + P)
+          </button>
           
-          <div class="grid grid-cols-2 gap-2">
-            <button id="addPairBtn" class="btn-secondary-custom py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 font-semibold">
-              <i class="fa-solid fa-plus text-indigo-400"></i> Thêm Cặp Mới
-            </button>
-            <button id="clearAllBtn" class="btn-secondary-custom py-2 px-3 rounded-xl text-xs text-red-400 hover:text-red-300 hover:border-red-500/40 flex items-center justify-center gap-1.5 font-semibold">
-              <i class="fa-solid fa-trash-can"></i> Xóa Tất Cả
-            </button>
-          </div>
+          <button id="clearAllBtn" class="btn-secondary-custom w-full py-3 px-4 rounded-xl text-sm text-red-400 hover:text-red-300 hover:border-red-500/40 flex items-center justify-center gap-2 font-semibold">
+            <i class="fa-solid fa-trash-can"></i> Xóa Tất Cả
+          </button>
         </div>
 
       </section>
 
-      <!-- Center Panel: Upload & Cards List -->
+      <!-- Center Panel: Live Paper Grid -->
       <section class="flex flex-col gap-4">
         
         <!-- Drag and Drop Zone (Global) - Sleek Compact Bar -->
@@ -132,35 +155,24 @@
           </div>
           <div class="text-left flex-grow">
             <h3 class="text-xs font-bold text-white mb-0.5">Kéo thả nhiều ảnh Căn cước vào đây để thêm</h3>
-            <p class="text-[10px] text-slate-400">Chương trình tự động ghép cặp Trước (Trái) / Sau (Phải) theo thứ tự chọn.</p>
+            <p class="text-[10px] text-slate-400">Ảnh tải lên sẽ tự động điền vào các khung trống trên trang giấy theo thứ tự chọn.</p>
           </div>
           <span class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[10px] py-1.5 px-3 rounded-lg transition-colors whitespace-nowrap z-10">
             Chọn tệp ảnh
           </span>
         </div>
 
-        <!-- CCCD Pairs List -->
-        <div class="flex flex-col gap-4 overflow-y-auto max-h-[75vh] pr-1" id="cccdListContainer">
-          <!-- Empty State -->
-          <div id="emptyState" class="glass-panel p-12 text-center text-slate-500 flex flex-col items-center justify-center">
-            <i class="fa-regular fa-image text-5xl text-slate-700 mb-4"></i>
-            <h4 class="text-base font-semibold text-slate-400">Chưa có ảnh nào được thêm</h4>
-            <p class="text-xs text-slate-500 mt-1 max-w-sm">Tải ảnh lên bằng khung kéo thả phía trên hoặc nhấn "Thêm Cặp Mới" để điền từng ảnh thủ công.</p>
-          </div>
-          <!-- Dynamic pairs will be rendered here by JS -->
-        </div>
+        <!-- Hidden input for clicking specific slot -->
+        <input type="file" id="slotFileInput" accept="image/*" class="hidden">
 
-      </section>
-
-      <!-- Right Panel: Live Preview (Large Viewport) -->
-      <section class="flex flex-col gap-4">
-        <div class="glass-panel p-5 flex flex-col gap-3 h-full justify-between">
+        <!-- Live Simulated Paper -->
+        <div class="glass-panel p-5 flex flex-col gap-3 h-full justify-between flex-grow">
           <div>
             <h2 class="text-base font-semibold border-b border-slate-700/50 pb-2 mb-1 text-white flex justify-between items-center">
-              <span><i class="fa-solid fa-eye text-indigo-400"></i> Xem Trước Bản In</span>
-              <span class="text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full uppercase" id="previewPaperLabel">A5</span>
+              <span><i class="fa-solid fa-file-invoice text-indigo-400"></i> Trang Giấy In CCCD</span>
+              <span class="text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2.5 py-0.5 rounded-full uppercase font-bold" id="previewPaperLabel">A5</span>
             </h2>
-            <p class="text-[11px] text-slate-400 mb-4">Mô phỏng vị trí in thực tế trong tệp Word.</p>
+            <p class="text-[11px] text-slate-400 mb-2">Click vào khung trống để thêm ảnh, hoặc click vào ảnh đã thêm để căn chỉnh ở cột phải.</p>
           </div>
           
           <div class="preview-container border border-slate-700/50 flex flex-col items-center justify-center p-4 relative w-full my-auto" id="layoutPreview">
@@ -174,6 +186,94 @@
             Mô phỏng in theo tỷ lệ hiển thị màn hình (96 DPI)
           </div>
         </div>
+
+      </section>
+
+      <!-- Right Panel: Centralized CCCD Card Editor -->
+      <section class="flex flex-col gap-4" id="editorContainer">
+        
+        <!-- Editor Empty State -->
+        <div id="editorEmptyState" class="glass-panel p-8 text-center text-slate-500 flex flex-col items-center justify-center h-full min-h-[400px]">
+          <div class="bg-slate-900/50 text-slate-600 p-4 rounded-full border border-slate-800/80 mb-4">
+            <i class="fa-solid fa-crop-simple text-4xl"></i>
+          </div>
+          <h4 class="text-sm font-semibold text-slate-400">Chưa chọn ảnh chỉnh sửa</h4>
+          <p class="text-xs text-slate-500 mt-1 max-w-[250px] mx-auto">Vui lòng click vào một mặt CCCD đã tải ảnh lên trên trang giấy để thực hiện căn chỉnh.</p>
+        </div>
+
+        <!-- Editor Active State -->
+        <div id="editorActiveState" class="glass-panel p-5 flex flex-col gap-4 h-full hidden">
+          <!-- Editor Header -->
+          <div class="flex justify-between items-center border-b border-slate-700/50 pb-2">
+            <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+              <i class="fa-solid fa-sliders text-indigo-400"></i> Cân Chỉnh: <span id="editorTitleLabel" class="text-indigo-300">Cặp #1 - Mặt Trước</span>
+            </h2>
+            <button id="editorSwapBtn" class="btn-secondary-custom px-2 py-0.5 rounded text-[10px] flex items-center gap-1 hover:text-indigo-400" title="Hoán đổi mặt trước và mặt sau">
+              <i class="fa-solid fa-right-left"></i> Đổi Mặt
+            </button>
+          </div>
+
+          <!-- Active Workspace: Crop Area -->
+          <div class="card-upload-container border border-slate-800 rounded-xl bg-slate-900/30 overflow-hidden relative w-full" style="aspect-ratio: 1.5857;">
+            <div class="perspective-wrap w-full h-full">
+              <div id="editorPerspectiveContent" class="perspective-content w-full h-full">
+                <img id="editorOriginalImage" class="original-image max-w-full max-h-full object-contain pointer-events-none" src="" alt="CCCD Original">
+                
+                <!-- Draggable Pins -->
+                <div class="pin absolute" data-pin="tl" id="editorPinTL" style="left: 15%; top: 15%;"></div>
+                <div class="pin absolute" data-pin="tr" id="editorPinTR" style="left: 85%; top: 15%;"></div>
+                <div class="pin absolute" data-pin="br" id="editorPinBR" style="left: 85%; top: 85%;"></div>
+                <div class="pin absolute" data-pin="bl" id="editorPinBL" style="left: 15%; top: 85%;"></div>
+                
+                <!-- SVG Overlay -->
+                <svg class="absolute inset-0 w-full h-full pointer-events-none z-20">
+                  <polygon id="editorPolygon" points="" class="fill-indigo-500/5 stroke-indigo-500 stroke-2" style="stroke-dasharray: 4;"></polygon>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Rotate and Zoom Settings -->
+          <div class="flex flex-col gap-3 bg-slate-900/60 p-3 rounded-lg border border-slate-800 text-xs">
+            <!-- Rotate row -->
+            <div class="flex justify-between items-center">
+              <span class="text-slate-400 font-medium">Xoay ảnh gốc:</span>
+              <div class="flex gap-2">
+                <button id="editorRotateLeftBtn" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-md flex items-center gap-1" title="Xoay trái 90 độ">
+                  <i class="fa-solid fa-rotate-left"></i> Xoay Trái
+                </button>
+                <button id="editorRotateRightBtn" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-md flex items-center gap-1" title="Xoay phải 90 độ">
+                  <i class="fa-solid fa-rotate-right"></i> Xoay Phải
+                </button>
+              </div>
+            </div>
+
+            <!-- Zoom row -->
+            <div class="flex justify-between items-center">
+              <span class="text-slate-400 font-medium">Thu phóng ảnh:</span>
+              <div class="flex gap-2 items-center">
+                <button id="editorZoomOutBtn" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1 rounded-md" title="Thu nhỏ">
+                  <i class="fa-solid fa-magnifying-glass-minus text-[10px]"></i>
+                </button>
+                <span id="editorZoomValue" class="text-[10px] text-indigo-400 font-bold w-9 text-center select-none">100%</span>
+                <button id="editorZoomInBtn" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1 rounded-md" title="Phóng to">
+                  <i class="fa-solid fa-magnifying-glass-plus text-[10px]"></i>
+                </button>
+              </div>
+            </div>
+
+            <div class="h-[1px] bg-slate-800/80 my-1"></div>
+
+            <!-- Bottom Actions -->
+            <div class="flex justify-between items-center">
+              <span class="text-[10px] text-slate-500 select-none">Cuộn chuột để zoom, kéo chuột để pan.</span>
+              <button id="editorRemoveImgBtn" class="text-red-400 hover:text-red-300 font-semibold px-2 py-1 flex items-center gap-1 hover:bg-red-500/10 rounded transition-colors" title="Xóa ảnh này">
+                <i class="fa-solid fa-trash-can"></i> Xóa ảnh
+              </button>
+            </div>
+          </div>
+        </div>
+
       </section>
       
     </main>

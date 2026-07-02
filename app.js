@@ -1,22 +1,48 @@
 // State Management
 let pairs = [];
+let selectedSide = { pairId: null, side: null };
+let activeUploadTarget = null; // { pairState, side }
+
 const PREVIEW_DPI = 96; // 1 inch = 96px in screen representation
 const CM_TO_INCH = 0.393700787;
 const CM_TO_TWIPS = 566.929; // 1 cm = 566.929 twips (dxa)
 
 // DOM Elements
 const paperSizeSelect = document.getElementById('paperSize');
-const cccdListContainer = document.getElementById('cccdListContainer');
-const emptyState = document.getElementById('emptyState');
-const addPairBtn = document.getElementById('addPairBtn');
 const clearAllBtn = document.getElementById('clearAllBtn');
 const exportWordBtn = document.getElementById('exportWordBtn');
+const printBtn = document.getElementById('printBtn');
 const globalDropzone = document.getElementById('globalDropzone');
 const globalFileInput = document.getElementById('globalFileInput');
+const slotFileInput = document.getElementById('slotFileInput');
 const simulatedPaper = document.getElementById('simulatedPaper');
 const previewPaperLabel = document.getElementById('previewPaperLabel');
 const themeToggle = document.getElementById('themeToggle');
 const themeIcon = document.getElementById('themeIcon');
+
+// Duplicate & Sync Elements
+const duplicatePair1Btn = document.getElementById('duplicatePair1Btn');
+const syncPair1Checkbox = document.getElementById('syncPair1Checkbox');
+
+
+// Centralized Editor Elements
+const editorEmptyState = document.getElementById('editorEmptyState');
+const editorActiveState = document.getElementById('editorActiveState');
+const editorTitleLabel = document.getElementById('editorTitleLabel');
+const editorSwapBtn = document.getElementById('editorSwapBtn');
+const editorOriginalImage = document.getElementById('editorOriginalImage');
+const editorPerspectiveContent = document.getElementById('editorPerspectiveContent');
+const editorPolygon = document.getElementById('editorPolygon');
+const editorRotateLeftBtn = document.getElementById('editorRotateLeftBtn');
+const editorRotateRightBtn = document.getElementById('editorRotateRightBtn');
+const editorZoomInBtn = document.getElementById('editorZoomInBtn');
+const editorZoomOutBtn = document.getElementById('editorZoomOutBtn');
+const editorZoomValue = document.getElementById('editorZoomValue');
+const editorRemoveImgBtn = document.getElementById('editorRemoveImgBtn');
+const editorPinTL = document.getElementById('editorPinTL');
+const editorPinTR = document.getElementById('editorPinTR');
+const editorPinBR = document.getElementById('editorPinBR');
+const editorPinBL = document.getElementById('editorPinBL');
 
 // Initialize Theme
 let currentTheme = localStorage.getItem('theme') || 'dark';
@@ -106,24 +132,38 @@ globalFileInput.addEventListener('change', (e) => {
   }
 });
 
-// App init
-addPairBtn.addEventListener('click', () => {
-  const success = createNewPair();
-  if (!success) {
-    const paperSize = paperSizeSelect.value;
-    const maxPairs = paperSize === 'A5' ? 2 : 4;
-    showToast('Giới hạn', `Không thể thêm. Khổ ${paperSize} giới hạn tối đa ${maxPairs} CCCD.`, 'warning');
+// Slot-specific upload listener
+slotFileInput.addEventListener('change', (e) => {
+  if (e.target.files && e.target.files[0] && activeUploadTarget) {
+    const { pairState, side } = activeUploadTarget;
+    loadCardImage(pairState, side, e.target.files[0]);
+    slotFileInput.value = ''; // reset
+    activeUploadTarget = null;
   }
 });
+
 clearAllBtn.addEventListener('click', () => {
-  if (pairs.length === 0) return;
-  if (confirm('Bạn có chắc chắn muốn xóa toàn bộ danh sách CCCD?')) {
+  const hasImages = pairs.some(p => p.front.originalSrc || p.back.originalSrc);
+  if (!hasImages) return;
+  if (confirm('Bạn có chắc chắn muốn xóa toàn bộ danh sách ảnh CCCD?')) {
     clearAllPairs();
   }
 });
+
 exportWordBtn.addEventListener('click', exportToWord);
 
-// Handle multiple file uploads and pair them up automatically
+if (printBtn) {
+  printBtn.addEventListener('click', () => {
+    const hasImages = pairs.some(p => p.front.croppedDataUrl || p.back.croppedDataUrl);
+    if (!hasImages) {
+      showToast('Lỗi', 'Không có hình ảnh đã cắt để in. Vui lòng thêm và căn chỉnh ảnh trước.', 'error');
+      return;
+    }
+    window.print();
+  });
+}
+
+// Handle multiple file uploads and fill slots sequentially
 async function handleUploadedFiles(fileList) {
   const imageFiles = Array.from(fileList).filter(file => file.type.startsWith('image/'));
   if (imageFiles.length === 0) {
@@ -134,465 +174,110 @@ async function handleUploadedFiles(fileList) {
   imageFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   showToast('Đang tải ảnh', `Đang xử lý ${imageFiles.length} hình ảnh...`, 'info');
 
-  let addedAny = false;
-  for (let i = 0; i < imageFiles.length; i += 2) {
-    const file1 = imageFiles[i];
-    const file2 = imageFiles[i + 1] || null;
-    const success = await createNewPair(file1, file2);
+  let filledCount = 0;
+  for (let i = 0; i < imageFiles.length; i++) {
+    const success = await fillNextEmptySlot(imageFiles[i]);
     if (!success) {
-      const paperSize = paperSizeSelect.value;
-      const maxPairs = paperSize === 'A5' ? 2 : 4;
-      showToast('Giới hạn', `Đã đạt giới hạn tối đa ${maxPairs} CCCD cho khổ ${paperSize}.`, 'warning');
+      showToast('Giới hạn', `Đã điền đầy tất cả các khung hình hiện có trên khổ giấy.`, 'warning');
       break;
     }
-    addedAny = true;
+    filledCount++;
   }
-}
-
-function enforceLimits() {
-  const paperSize = paperSizeSelect.value;
-  const maxPairs = paperSize === 'A5' ? 2 : 4;
   
-  if (pairs.length > maxPairs) {
-    const removedCount = pairs.length - maxPairs;
-    for (let i = maxPairs; i < pairs.length; i++) {
-      const el = document.getElementById(pairs[i].id);
-      if (el) el.remove();
-    }
-    pairs = pairs.slice(0, maxPairs);
-    updateLabels();
-    updateLivePreview();
-    showToast('Cấu hình', `Khổ ${paperSize} giới hạn tối đa ${maxPairs} CCCD. Đã tự động bỏ ${removedCount} cặp thừa.`, 'warning');
-  }
-}
-
-// Create a new card pair object and DOM element
-function createNewPair(frontFile = null, backFile = null) {
-  const paperSize = paperSizeSelect.value;
-  const maxPairs = paperSize === 'A5' ? 2 : 4;
-  
-  if (pairs.length >= maxPairs) {
-    return false;
-  }
-
-  const pairId = 'pair_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-  
-  const pairState = {
-    id: pairId,
-    front: { originalSrc: null, croppedDataUrl: null, zoom: 100 },
-    back: { originalSrc: null, croppedDataUrl: null, zoom: 100 }
-  };
-  
-  pairs.push(pairState);
-  
-  // Render Pair Box in DOM with 4-pin perspective crop UI and zoom controls
-  const pairHTML = `
-    <div id="${pairId}" class="glass-panel p-5 border border-slate-800 cccd-pair-card flex flex-col gap-4 relative overflow-hidden">
-      <div class="glow-effect"></div>
-      
-      <!-- Pair Header -->
-      <div class="flex justify-between items-center pb-2 border-b border-slate-800/60 z-10">
-        <div class="flex items-center gap-2">
-          <span class="bg-indigo-600/10 text-indigo-400 text-xs font-bold px-2.5 py-1 rounded-md border border-indigo-500/10 pair-number-label">
-            Cặp CCCD #${pairs.length}
-          </span>
-        </div>
-        <div class="flex items-center gap-2">
-          <button class="swap-btn btn-secondary-custom px-2.5 py-1 rounded-lg text-xs flex items-center gap-1 hover:text-indigo-400" title="Hoán đổi mặt trước và sau">
-            <i class="fa-solid fa-right-left"></i> Đổi Mặt
-          </button>
-          <button class="delete-pair-btn text-slate-400 hover:text-red-400 transition-colors p-1" title="Xóa cặp này">
-            <i class="fa-solid fa-trash-can text-sm"></i>
-          </button>
-        </div>
-      </div>
-      
-      <!-- Upload/Crop side by side -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 z-10">
-        
-        <!-- Mặt Trước (Front) Column -->
-        <div class="flex flex-col gap-2">
-          <div class="flex justify-between items-center">
-            <span class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-              <span class="w-1.5 h-1.5 rounded-full bg-indigo-500"></span> Mặt Trước
-            </span>
-          </div>
-          
-          <!-- Dropzone/Perspective container -->
-          <div class="card-upload-container border border-slate-800 rounded-xl bg-slate-900/30 overflow-hidden relative" style="aspect-ratio: 1.5857;">
-            <!-- Dropzone state -->
-            <div class="card-dropzone dropzone absolute inset-0 flex flex-col items-center justify-center p-4 text-center" data-side="front">
-              <input type="file" accept="image/*" class="card-file-input absolute inset-0 opacity-0 cursor-pointer w-full h-full">
-              <i class="fa-solid fa-camera text-2xl text-slate-600 mb-2"></i>
-              <p class="text-[11px] text-slate-400 font-medium">Kéo thả mặt trước hoặc bấm chọn</p>
-            </div>
-            <!-- Image Crop state (Perspective Warp) -->
-            <div class="card-crop-area hidden absolute inset-0 bg-slate-950 select-none">
-              <div class="perspective-wrap">
-                <div class="perspective-content">
-                  <img class="original-image max-w-full max-h-full object-contain pointer-events-none" src="" alt="Mặt trước">
-                  
-                  <!-- Pins -->
-                  <div class="pin absolute" data-pin="tl"></div>
-                  <div class="pin absolute" data-pin="tr"></div>
-                  <div class="pin absolute" data-pin="br"></div>
-                  <div class="pin absolute" data-pin="bl"></div>
-                  
-                  <!-- SVG Overlay -->
-                  <svg class="absolute inset-0 w-full h-full pointer-events-none z-20">
-                    <polygon points="" class="fill-indigo-500/5 stroke-indigo-500 stroke-2" style="stroke-dasharray: 4;"></polygon>
-                  </svg>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Controls (Rotate + Zoom) -->
-          <div class="card-controls hidden flex justify-between items-center bg-slate-900/60 p-2 rounded-lg border border-slate-800 text-xs">
-            <div class="flex gap-1.5 items-center">
-              <button class="rotate-left-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Xoay trái 90 độ">
-                <i class="fa-solid fa-rotate-left"></i>
-              </button>
-              <button class="rotate-right-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Xoay phải 90 độ">
-                <i class="fa-solid fa-rotate-right"></i>
-              </button>
-              
-              <span class="w-[1px] h-4 bg-slate-800 mx-1"></span>
-              <span class="text-[10px] text-slate-500 select-none">Thu phóng:</span>
-              <button class="zoom-out-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Thu nhỏ">
-                <i class="fa-solid fa-magnifying-glass-minus text-[10px]"></i>
-              </button>
-              <span class="zoom-value text-[10px] text-indigo-400 font-bold w-9 text-center select-none">100%</span>
-              <button class="zoom-in-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Phóng to">
-                <i class="fa-solid fa-magnifying-glass-plus text-[10px]"></i>
-              </button>
-            </div>
-            <button class="remove-img-btn text-red-400 hover:text-red-300 font-semibold px-2 py-1" title="Xóa ảnh này">
-              <i class="fa-solid fa-trash-can mr-1"></i> Xóa ảnh
-            </button>
-          </div>
-        </div>
-
-        <!-- Mặt Sau (Back) Column -->
-        <div class="flex flex-col gap-2">
-          <div class="flex justify-between items-center">
-            <span class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Mặt Sau
-            </span>
-          </div>
-          
-          <!-- Dropzone/Perspective container -->
-          <div class="card-upload-container border border-slate-800 rounded-xl bg-slate-900/30 overflow-hidden relative" style="aspect-ratio: 1.5857;">
-            <!-- Dropzone state -->
-            <div class="card-dropzone dropzone absolute inset-0 flex flex-col items-center justify-center p-4 text-center" data-side="back">
-              <input type="file" accept="image/*" class="card-file-input absolute inset-0 opacity-0 cursor-pointer w-full h-full">
-              <i class="fa-solid fa-camera text-2xl text-slate-600 mb-2"></i>
-              <p class="text-[11px] text-slate-400 font-medium">Kéo thả mặt sau hoặc bấm chọn</p>
-            </div>
-            <!-- Image Crop state (Perspective Warp) -->
-            <div class="card-crop-area hidden absolute inset-0 bg-slate-950 select-none">
-              <div class="perspective-wrap">
-                <div class="perspective-content">
-                  <img class="original-image max-w-full max-h-full object-contain pointer-events-none" src="" alt="Mặt sau">
-                  
-                  <!-- Pins -->
-                  <div class="pin absolute" data-pin="tl"></div>
-                  <div class="pin absolute" data-pin="tr"></div>
-                  <div class="pin absolute" data-pin="br"></div>
-                  <div class="pin absolute" data-pin="bl"></div>
-                  
-                  <!-- SVG Overlay -->
-                  <svg class="absolute inset-0 w-full h-full pointer-events-none z-20">
-                    <polygon points="" class="fill-indigo-500/5 stroke-indigo-500 stroke-2" style="stroke-dasharray: 4;"></polygon>
-                  </svg>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Controls (Rotate + Zoom) -->
-          <div class="card-controls hidden flex justify-between items-center bg-slate-900/60 p-2 rounded-lg border border-slate-800 text-xs">
-            <div class="flex gap-1.5 items-center">
-              <button class="rotate-left-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Xoay trái 90 độ">
-                <i class="fa-solid fa-rotate-left"></i>
-              </button>
-              <button class="rotate-right-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Xoay phải 90 độ">
-                <i class="fa-solid fa-rotate-right"></i>
-              </button>
-              
-              <span class="w-[1px] h-4 bg-slate-800 mx-1"></span>
-              <span class="text-[10px] text-slate-500 select-none">Thu phóng:</span>
-              <button class="zoom-out-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Thu nhỏ">
-                <i class="fa-solid fa-magnifying-glass-minus text-[10px]"></i>
-              </button>
-              <span class="zoom-value text-[10px] text-indigo-400 font-bold w-9 text-center select-none">100%</span>
-              <button class="zoom-in-btn bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1.5 rounded-md" title="Phóng to">
-                <i class="fa-solid fa-magnifying-glass-plus text-[10px]"></i>
-              </button>
-            </div>
-            <button class="remove-img-btn text-red-400 hover:text-red-300 font-semibold px-2 py-1" title="Xóa ảnh này">
-              <i class="fa-solid fa-trash-can mr-1"></i> Xóa ảnh
-            </button>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  `;
-  
-  // Append to container
-  cccdListContainer.insertAdjacentHTML('beforeend', pairHTML);
-  emptyState.classList.add('hidden');
-  
-  const pairEl = document.getElementById(pairId);
-  setupPairEvents(pairEl, pairState);
-
-  // If initial files are provided, load them
-  if (frontFile) {
-    loadCardImage(pairEl, pairState, 'front', frontFile);
-  }
-  if (backFile) {
-    loadCardImage(pairEl, pairState, 'back', backFile);
-  }
-
-  updateLabels();
   updateLivePreview();
-}
-
-// Set up event listeners for a specific pair card element
-function setupPairEvents(pairEl, pairState) {
-  pairEl.querySelector('.delete-pair-btn').addEventListener('click', () => {
-    deletePair(pairState.id);
-  });
-
-  pairEl.querySelector('.swap-btn').addEventListener('click', () => {
-    swapSides(pairState);
-  });
-
-  const dropzones = pairEl.querySelectorAll('.card-dropzone');
-  dropzones.forEach(zone => {
-    const side = zone.getAttribute('data-side');
-    const input = zone.querySelector('.card-file-input');
-
-    zone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      zone.classList.add('dragover');
-    });
-
-    zone.addEventListener('dragleave', () => {
-      zone.classList.remove('dragover');
-    });
-
-    zone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      zone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-        loadCardImage(pairEl, pairState, side, e.dataTransfer.files[0]);
-      }
-    });
-
-    input.addEventListener('change', (e) => {
-      if (e.target.files && e.target.files[0]) {
-        loadCardImage(pairEl, pairState, side, e.target.files[0]);
-        input.value = ''; // reset
-      }
-    });
-  });
-
-  setupSideControls(pairEl, pairState, 'front');
-  setupSideControls(pairEl, pairState, 'back');
-}
-
-// Setup controls handlers for a side (rotate, remove, zoom)
-function setupSideControls(pairEl, pairState, side) {
-  const sideCol = pairEl.querySelectorAll('.grid > div')[side === 'front' ? 0 : 1];
-  const controlsEl = sideCol.querySelector('.card-controls');
-  const rotateLeftBtn = controlsEl.querySelector('.rotate-left-btn');
-  const rotateRightBtn = controlsEl.querySelector('.rotate-right-btn');
-  const removeImgBtn = controlsEl.querySelector('.remove-img-btn');
   
-  const zoomInBtn = controlsEl.querySelector('.zoom-in-btn');
-  const zoomOutBtn = controlsEl.querySelector('.zoom-out-btn');
-  const zoomValueText = controlsEl.querySelector('.zoom-value');
-  const perspectiveContent = sideCol.querySelector('.perspective-content');
-
-  rotateLeftBtn.addEventListener('click', () => {
-    rotateSideImage(pairEl, pairState, side, -90);
-  });
-
-  rotateRightBtn.addEventListener('click', () => {
-    rotateSideImage(pairEl, pairState, side, 90);
-  });
-
-  removeImgBtn.addEventListener('click', () => {
-    removeCardImage(pairEl, pairState, side);
-  });
-
-  // Zoom In
-  zoomInBtn.addEventListener('click', () => {
-    const item = pairState[side];
-    const oldZoom = item.zoom || 100;
-    if (oldZoom < 400) {
-      const zoom = Math.min(400, oldZoom + 25);
-      item.zoom = zoom;
-      zoomValueText.textContent = `${zoom}%`;
-      
-      const mouseX = perspectiveWrap.clientWidth / 2;
-      const mouseY = perspectiveWrap.clientHeight / 2;
-      const contentX = perspectiveWrap.scrollLeft + mouseX;
-      const contentY = perspectiveWrap.scrollTop + mouseY;
-
-      perspectiveContent.style.width = `${zoom}%`;
-      perspectiveContent.style.height = `${zoom}%`;
-      updatePolygonOverlay(pairEl, side);
-
-      const ratio = zoom / oldZoom;
-      perspectiveWrap.scrollLeft = (contentX * ratio) - mouseX;
-      perspectiveWrap.scrollTop = (contentY * ratio) - mouseY;
-    }
-  });
-
-  // Zoom Out
-  zoomOutBtn.addEventListener('click', () => {
-    const item = pairState[side];
-    const oldZoom = item.zoom || 100;
-    if (oldZoom > 100) {
-      const zoom = Math.max(100, oldZoom - 25);
-      item.zoom = zoom;
-      zoomValueText.textContent = `${zoom}%`;
-      
-      const mouseX = perspectiveWrap.clientWidth / 2;
-      const mouseY = perspectiveWrap.clientHeight / 2;
-      const contentX = perspectiveWrap.scrollLeft + mouseX;
-      const contentY = perspectiveWrap.scrollTop + mouseY;
-
-      perspectiveContent.style.width = `${zoom}%`;
-      perspectiveContent.style.height = `${zoom}%`;
-      updatePolygonOverlay(pairEl, side);
-
-      const ratio = zoom / oldZoom;
-      perspectiveWrap.scrollLeft = (contentX * ratio) - mouseX;
-      perspectiveWrap.scrollTop = (contentY * ratio) - mouseY;
-    }
-  });
-
-  const perspectiveWrap = sideCol.querySelector('.perspective-wrap');
-
-  // Mouse Wheel Zoom centered on cursor
-  perspectiveWrap.addEventListener('wheel', (e) => {
-    const item = pairState[side];
-    if (!item.originalSrc) return;
-    
-    e.preventDefault();
-
-    const rect = perspectiveWrap.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const oldScrollLeft = perspectiveWrap.scrollLeft;
-    const oldScrollTop = perspectiveWrap.scrollTop;
-    const contentX = oldScrollLeft + mouseX;
-    const contentY = oldScrollTop + mouseY;
-
-    const oldZoom = item.zoom || 100;
-    let zoom = oldZoom;
-    if (e.deltaY < 0) {
-      zoom = Math.min(400, zoom + 15);
-    } else {
-      zoom = Math.max(100, zoom - 15);
-    }
-
-    if (zoom !== oldZoom) {
-      item.zoom = zoom;
-      zoomValueText.textContent = `${zoom}%`;
-      perspectiveContent.style.width = `${zoom}%`;
-      perspectiveContent.style.height = `${zoom}%`;
-      updatePolygonOverlay(pairEl, side);
-
-      // Adjust scroll based on direct zoom ratio
-      const ratio = zoom / oldZoom;
-      perspectiveWrap.scrollLeft = (contentX * ratio) - mouseX;
-      perspectiveWrap.scrollTop = (contentY * ratio) - mouseY;
-    }
-  }, { passive: false });
-
-  // Drag to Pan
-  let isPanning = false;
-  let startX = 0, startY = 0;
-  let startScrollLeft = 0, startScrollTop = 0;
-
-  perspectiveWrap.addEventListener('mousedown', (e) => {
-    if (e.target.classList.contains('pin')) return; // ignore pin dragging
-    const item = pairState[side];
-    if (!item.originalSrc) return;
-
-    isPanning = true;
-    perspectiveWrap.style.cursor = 'grabbing';
-    startX = e.clientX;
-    startY = e.clientY;
-    startScrollLeft = perspectiveWrap.scrollLeft;
-    startScrollTop = perspectiveWrap.scrollTop;
-  });
-
-  window.addEventListener('mousemove', (e) => {
-    if (!isPanning) return;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    perspectiveWrap.scrollLeft = startScrollLeft - dx;
-    perspectiveWrap.scrollTop = startScrollTop - dy;
-  });
-
-  window.addEventListener('mouseup', () => {
-    if (isPanning) {
-      isPanning = false;
-      const item = pairState[side];
-      if (item && item.originalSrc) {
-        perspectiveWrap.style.cursor = 'grab';
-      } else {
-        perspectiveWrap.style.cursor = 'auto';
+  if (filledCount > 0) {
+    let lastPair = null;
+    let lastSide = null;
+    for (let i = 0; i < pairs.length; i++) {
+      const pair = pairs[i];
+      if (pair.front.originalSrc) {
+        lastPair = pair;
+        lastSide = 'front';
+      }
+      if (pair.back.originalSrc) {
+        lastPair = pair;
+        lastSide = 'back';
       }
     }
-  });
-
-  perspectiveWrap.addEventListener('mouseover', (e) => {
-    const item = pairState[side];
-    if (item.originalSrc && !e.target.classList.contains('pin') && !isPanning) {
-      perspectiveWrap.style.cursor = 'grab';
+    if (lastPair && lastSide) {
+      selectedSide = { pairId: lastPair.id, side: lastSide };
+      updateLivePreview();
+      loadEditor(lastPair, lastSide);
     }
-  });
+  }
+}
 
-  // Touch panning
-  perspectiveWrap.addEventListener('touchstart', (e) => {
-    if (e.target.classList.contains('pin')) return;
-    const item = pairState[side];
-    if (!item.originalSrc) return;
-
-    if (e.touches.length === 1) {
-      isPanning = true;
-      startX = e.touches[0].clientX;
-      startY = e.touches[0].clientY;
-      startScrollLeft = perspectiveWrap.scrollLeft;
-      startScrollTop = perspectiveWrap.scrollTop;
+async function fillNextEmptySlot(file) {
+  const isSyncEnabled = syncPair1Checkbox && syncPair1Checkbox.checked;
+  for (let i = 0; i < pairs.length; i++) {
+    if (isSyncEnabled && i > 0) {
+      break;
     }
-  }, { passive: true });
-
-  perspectiveWrap.addEventListener('touchmove', (e) => {
-    if (!isPanning) return;
-    if (e.touches.length === 1) {
-      const dx = e.touches[0].clientX - startX;
-      const dy = e.touches[0].clientY - startY;
-      perspectiveWrap.scrollLeft = startScrollLeft - dx;
-      perspectiveWrap.scrollTop = startScrollTop - dy;
+    const pair = pairs[i];
+    if (!pair.front.originalSrc) {
+      await loadCardImageAsync(pair, 'front', file);
+      return true;
     }
-  }, { passive: true });
+    if (!pair.back.originalSrc) {
+      await loadCardImageAsync(pair, 'back', file);
+      return true;
+    }
+  }
+  return false;
+}
 
-  perspectiveWrap.addEventListener('touchend', () => {
-    isPanning = false;
+function loadCardImageAsync(pairState, side, file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      pairState[side].originalSrc = e.target.result;
+      pairState[side].croppedDataUrl = null;
+      pairState[side].pins = null;
+      pairState[side].zoom = 100;
+      
+      const img = new Image();
+      img.onload = function() {
+        const w_n = img.naturalWidth;
+        const h_n = img.naturalHeight;
+        
+        let detectedCorners = null;
+        if (window.cvReady) {
+          detectedCorners = detectCardCornersOpenCV(img);
+        }
+        
+        if (detectedCorners) {
+          pairState[side].pins = {
+            tl: { x: detectedCorners[0].x, y: detectedCorners[0].y },
+            tr: { x: detectedCorners[1].x, y: detectedCorners[1].y },
+            br: { x: detectedCorners[2].x, y: detectedCorners[2].y },
+            bl: { x: detectedCorners[3].x, y: detectedCorners[3].y }
+          };
+        } else {
+          const insetX = w_n * 0.15;
+          const insetY = h_n * 0.15;
+          pairState[side].pins = {
+            tl: { x: insetX, y: insetY },
+            tr: { x: w_n - insetX, y: insetY },
+            br: { x: w_n - insetX, y: h_n - insetY },
+            bl: { x: insetX, y: h_n - insetY }
+          };
+        }
+        
+        warpCard(pairState, side).then(() => {
+          if (pairState === pairs[0]) {
+            syncPair1ToOthers();
+          }
+          resolve();
+        });
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
   });
 }
 
-// Load image into file reader and call UI setup
-function loadCardImage(pairEl, pairState, side, file) {
+function loadCardImage(pairState, side, file) {
   if (!file.type.startsWith('image/')) {
     showToast('Lỗi', 'Chỉ được tải lên tệp tin hình ảnh.', 'error');
     return;
@@ -601,90 +286,222 @@ function loadCardImage(pairEl, pairState, side, file) {
   const reader = new FileReader();
   reader.onload = function(e) {
     if (pairState[side].originalSrc) {
-      URL.revokeObjectURL(pairState[side].originalSrc);
+      try { URL.revokeObjectURL(pairState[side].originalSrc); } catch(err) {}
     }
+    
     pairState[side].originalSrc = e.target.result;
-    pairState[side].zoom = 100; // Reset zoom on new image
-    reloadSideUI(pairEl, pairState, side);
+    pairState[side].croppedDataUrl = null;
+    pairState[side].pins = null;
+    pairState[side].zoom = 100;
+    
+    selectedSide = { pairId: pairState.id, side: side };
+    
+    if (pairState === pairs[0]) {
+      syncPair1ToOthers();
+    }
+    
+    updateLivePreview();
+    loadEditor(pairState, side);
   };
   reader.readAsDataURL(file);
 }
 
-// Reload a specific side of the pair card (construct/bind pins and draw polygon)
-function reloadSideUI(pairEl, pairState, side) {
-  const sideCol = pairEl.querySelectorAll('.grid > div')[side === 'front' ? 0 : 1];
-  const dropzone = sideCol.querySelector('.card-dropzone');
-  const cropArea = sideCol.querySelector('.card-crop-area');
-  const controls = sideCol.querySelector('.card-controls');
-  const imgEl = cropArea.querySelector('.original-image');
+function enforceLimits() {
+  const paperSize = paperSizeSelect.value;
+  const targetPairs = paperSize === 'A5' ? 2 : 4;
   
-  const item = pairState[side];
-  
-  if (item.originalSrc) {
-    dropzone.classList.add('hidden');
-    cropArea.classList.remove('hidden');
-    controls.classList.remove('hidden');
-    
-    imgEl.src = item.originalSrc;
-    
-    imgEl.onload = function() {
-      const pins = {
-        tl: sideCol.querySelector('[data-pin="tl"]'),
-        tr: sideCol.querySelector('[data-pin="tr"]'),
-        br: sideCol.querySelector('[data-pin="br"]'),
-        bl: sideCol.querySelector('[data-pin="bl"]')
-      };
-      
-      const container = sideCol.querySelector('.perspective-content');
-      
-      // Update zoom elements UI state on reload
-      const zoomValueText = sideCol.querySelector('.zoom-value');
-      const zoomVal = item.zoom || 100;
-      zoomValueText.textContent = `${zoomVal}%`;
-      container.style.width = `${zoomVal}%`;
-      container.style.height = `${zoomVal}%`;
-
-      // Clear old drag event listeners by replacing with cloned nodes
-      Object.keys(pins).forEach(key => {
-        const oldPin = pins[key];
-        const newPin = oldPin.cloneNode(true);
-        oldPin.parentNode.replaceChild(newPin, oldPin);
-        
-        makePinDraggable(newPin, container, imgEl, () => {
-          updatePolygonOverlay(pairEl, side);
-        }, () => {
-          // On drag release: warp the image and update preview
-          warpCardWithPins(pairState, side);
-        });
-      });
-      
-      // Clean polygon lines overlay
-      const oldPoly = container.querySelector('polygon');
-      const newPoly = oldPoly.cloneNode(true);
-      oldPoly.parentNode.replaceChild(newPoly, oldPoly);
-      
-      // Position pins on load (snaps to auto boundaries or defaults)
-      initPinsForImage(pairEl, pairState, side);
-      
-      // Clear load trigger
-      imgEl.onload = null;
-    };
+  let needsSync = false;
+  if (pairs.length > targetPairs) {
+    const remainingIds = pairs.slice(0, targetPairs).map(p => p.id);
+    if (selectedSide.pairId && !remainingIds.includes(selectedSide.pairId)) {
+      resetEditor();
+    }
+    for (let i = targetPairs; i < pairs.length; i++) {
+      const p = pairs[i];
+      if (p.front.originalSrc) URL.revokeObjectURL(p.front.originalSrc);
+      if (p.back.originalSrc) URL.revokeObjectURL(p.back.originalSrc);
+    }
+    pairs = pairs.slice(0, targetPairs);
   } else {
-    dropzone.classList.remove('hidden');
-    cropArea.classList.add('hidden');
-    controls.classList.add('hidden');
-    imgEl.src = '';
+    if (pairs.length < targetPairs) {
+      needsSync = true;
+    }
+    while (pairs.length < targetPairs) {
+      pairs.push({
+        id: 'pair_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        front: { originalSrc: null, croppedDataUrl: null, zoom: 100, pins: null },
+        back: { originalSrc: null, croppedDataUrl: null, zoom: 100, pins: null }
+      });
+    }
+  }
+  
+  if (needsSync && syncPair1Checkbox && syncPair1Checkbox.checked) {
+    syncPair1ToOthers();
   }
 }
 
-// Draggable logic with constraints bounding to the rendered image bounds
-function makePinDraggable(pinEl, containerEl, imgEl, onDrag, onDragEnd) {
+function clearAllPairs() {
+  if (syncPair1Checkbox) syncPair1Checkbox.checked = false;
+  pairs.forEach(p => {
+    if (p.front.originalSrc) {
+      try { URL.revokeObjectURL(p.front.originalSrc); } catch(e) {}
+    }
+    if (p.back.originalSrc) {
+      try { URL.revokeObjectURL(p.back.originalSrc); } catch(e) {}
+    }
+    p.front = { originalSrc: null, croppedDataUrl: null, zoom: 100, pins: null };
+    p.back = { originalSrc: null, croppedDataUrl: null, zoom: 100, pins: null };
+  });
+  resetEditor();
+  updateLivePreview();
+  showToast('Xóa tất cả', 'Đã xóa toàn bộ ảnh thẻ CCCD.', 'success');
+}
+
+function resetEditor() {
+  selectedSide = { pairId: null, side: null };
+  editorActiveState.classList.add('hidden');
+  editorEmptyState.classList.remove('hidden');
+  editorOriginalImage.src = '';
+  editorPolygon.setAttribute('points', '');
+}
+
+function loadEditor(pairState, side) {
+  editorEmptyState.classList.add('hidden');
+  editorActiveState.classList.remove('hidden');
+  
+  const pairIndex = pairs.indexOf(pairState) + 1;
+  const sideText = side === 'front' ? 'Mặt Trước' : 'Mặt Sau';
+  editorTitleLabel.textContent = `Cặp #${pairIndex} - ${sideText}`;
+  
+  editorOriginalImage.src = pairState[side].originalSrc;
+  
+  editorOriginalImage.onload = function() {
+    const w_n = editorOriginalImage.naturalWidth;
+    const h_n = editorOriginalImage.naturalHeight;
+    if (!w_n || !h_n) return;
+    
+    const container = editorPerspectiveContent;
+    const w_c = container.clientWidth;
+    const h_c = container.clientHeight;
+    
+    const bounds = getCurrentImageBounds(container, editorOriginalImage);
+    
+    const zoomVal = pairState[side].zoom || 100;
+    editorZoomValue.textContent = `${zoomVal}%`;
+    container.style.width = `${zoomVal}%`;
+    container.style.height = `${zoomVal}%`;
+    
+    const wrap = container.parentNode;
+    wrap.scrollLeft = 0;
+    wrap.scrollTop = 0;
+    
+    if (!pairState[side].pins) {
+      let detectedCorners = null;
+      if (window.cvReady) {
+        detectedCorners = detectCardCornersOpenCV(editorOriginalImage);
+      }
+      
+      if (detectedCorners) {
+        pairState[side].pins = {
+          tl: { x: detectedCorners[0].x, y: detectedCorners[0].y },
+          tr: { x: detectedCorners[1].x, y: detectedCorners[1].y },
+          br: { x: detectedCorners[2].x, y: detectedCorners[2].y },
+          bl: { x: detectedCorners[3].x, y: detectedCorners[3].y }
+        };
+      } else {
+        const insetX = w_n * 0.15;
+        const insetY = h_n * 0.15;
+        pairState[side].pins = {
+          tl: { x: insetX, y: insetY },
+          tr: { x: w_n - insetX, y: insetY },
+          br: { x: w_n - insetX, y: h_n - insetY },
+          bl: { x: insetX, y: h_n - insetY }
+        };
+      }
+    }
+    
+    updateEditorPinsUI(pairState, side);
+    
+    if (!pairState[side].croppedDataUrl) {
+      warpCardWithPins(pairState, side);
+    }
+    
+    editorOriginalImage.onload = null;
+  };
+}
+
+function updateEditorPinsUI(pairState, side) {
+  const container = editorPerspectiveContent;
+  const w_c = container.clientWidth;
+  const h_c = container.clientHeight;
+  const w_n = editorOriginalImage.naturalWidth;
+  const h_n = editorOriginalImage.naturalHeight;
+  
+  if (!w_n || !h_n) return;
+  
+  const bounds = getCurrentImageBounds(container, editorOriginalImage);
+  const itemPins = pairState[side].pins;
+  
+  const pinTL = document.getElementById('editorPinTL');
+  const pinTR = document.getElementById('editorPinTR');
+  const pinBR = document.getElementById('editorPinBR');
+  const pinBL = document.getElementById('editorPinBL');
+  
+  function setPinStyle(pinEl, naturalPt) {
+    const px = (naturalPt.x / w_n) * bounds.width + bounds.left;
+    const py = (naturalPt.y / h_n) * bounds.height + bounds.top;
+    pinEl.style.left = `${(px / w_c) * 100}%`;
+    pinEl.style.top = `${(py / h_c) * 100}%`;
+  }
+  
+  setPinStyle(pinTL, itemPins.tl);
+  setPinStyle(pinTR, itemPins.tr);
+  setPinStyle(pinBR, itemPins.br);
+  setPinStyle(pinBL, itemPins.bl);
+  
+  updateEditorPolygonOverlay();
+}
+
+function updateEditorPolygonOverlay() {
+  const container = editorPerspectiveContent;
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  
+  const pinTL = document.getElementById('editorPinTL');
+  const pinTR = document.getElementById('editorPinTR');
+  const pinBR = document.getElementById('editorPinBR');
+  const pinBL = document.getElementById('editorPinBL');
+  
+  const p_tl = { x: parseFloat(pinTL.style.left) / 100 * w, y: parseFloat(pinTL.style.top) / 100 * h };
+  const p_tr = { x: parseFloat(pinTR.style.left) / 100 * w, y: parseFloat(pinTR.style.top) / 100 * h };
+  const p_br = { x: parseFloat(pinBR.style.left) / 100 * w, y: parseFloat(pinBR.style.top) / 100 * h };
+  const p_bl = { x: parseFloat(pinBL.style.left) / 100 * w, y: parseFloat(pinBL.style.top) / 100 * h };
+  
+  editorPolygon.setAttribute('points', `${p_tl.x},${p_tl.y} ${p_tr.x},${p_tr.y} ${p_br.x},${p_br.y} ${p_bl.x},${p_bl.y}`);
+}
+
+function setupEditorPinsDragHandlers() {
+  const pins = {
+    tl: document.getElementById('editorPinTL'),
+    tr: document.getElementById('editorPinTR'),
+    br: document.getElementById('editorPinBR'),
+    bl: document.getElementById('editorPinBL')
+  };
+  
+  Object.keys(pins).forEach(pinName => {
+    makeEditorPinDraggable(pins[pinName], pinName);
+  });
+}
+
+function makeEditorPinDraggable(pinEl, pinName) {
   let isDragging = false;
   let startX = 0, startY = 0;
   let startLeft = 0, startTop = 0;
   
   function onStart(e) {
     e.preventDefault();
+    if (!selectedSide.pairId) return;
+    
     isDragging = true;
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
@@ -702,11 +519,17 @@ function makePinDraggable(pinEl, containerEl, imgEl, onDrag, onDragEnd) {
   function onMove(e) {
     if (!isDragging) return;
     e.preventDefault();
+    
+    const activePair = pairs.find(p => p.id === selectedSide.pairId);
+    if (!activePair) return;
+    const activeItem = activePair[selectedSide.side];
+    
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
     
-    const containerWidth = containerEl.clientWidth;
-    const containerHeight = containerEl.clientHeight;
+    const container = editorPerspectiveContent;
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
     
     const dx = clientX - startX;
     const dy = clientY - startY;
@@ -714,8 +537,7 @@ function makePinDraggable(pinEl, containerEl, imgEl, onDrag, onDragEnd) {
     let newLeftPx = (startLeft / 100 * containerWidth) + dx;
     let newTopPx = (startTop / 100 * containerHeight) + dy;
     
-    // Constraint boundaries to rendered image area inside perspective-content wrapper
-    const bounds = getCurrentImageBounds(containerEl, imgEl);
+    const bounds = getCurrentImageBounds(container, editorOriginalImage);
     
     newLeftPx = Math.max(bounds.left, Math.min(bounds.left + bounds.width, newLeftPx));
     newTopPx = Math.max(bounds.top, Math.min(bounds.top + bounds.height, newTopPx));
@@ -723,7 +545,19 @@ function makePinDraggable(pinEl, containerEl, imgEl, onDrag, onDragEnd) {
     pinEl.style.left = `${(newLeftPx / containerWidth) * 100}%`;
     pinEl.style.top = `${(newTopPx / containerHeight) * 100}%`;
     
-    onDrag();
+    const w_n = editorOriginalImage.naturalWidth;
+    const h_n = editorOriginalImage.naturalHeight;
+    let img_x = (newLeftPx - bounds.left) / bounds.width * w_n;
+    let img_y = (newTopPx - bounds.top) / bounds.height * h_n;
+    img_x = Math.max(0, Math.min(w_n, img_x));
+    img_y = Math.max(0, Math.min(h_n, img_y));
+    
+    console.log(`Pin ${pinName} moved. Screen distance: dx=${dx}, dy=${dy}. Natural mapped coord: (${img_x}, ${img_y}) relative to natural size (${w_n}x${h_n}). Bounds info:`, bounds);
+    
+    if (!activeItem.pins) activeItem.pins = {};
+    activeItem.pins[pinName] = { x: img_x, y: img_y };
+    
+    updateEditorPolygonOverlay();
   }
   
   function onEnd() {
@@ -733,7 +567,11 @@ function makePinDraggable(pinEl, containerEl, imgEl, onDrag, onDragEnd) {
       document.removeEventListener('mouseup', onEnd);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('touchend', onEnd);
-      onDragEnd();
+      
+      const activePair = pairs.find(p => p.id === selectedSide.pairId);
+      if (activePair) {
+        warpCardWithPins(activePair, selectedSide.side);
+      }
     }
   }
   
@@ -741,7 +579,6 @@ function makePinDraggable(pinEl, containerEl, imgEl, onDrag, onDragEnd) {
   pinEl.addEventListener('touchstart', onStart, { passive: false });
 }
 
-// Compute the bounds of the image element rendered within object-contain frame
 function getCurrentImageBounds(container, img) {
   const containerW = container.clientWidth;
   const containerH = container.clientHeight;
@@ -771,215 +608,197 @@ function getCurrentImageBounds(container, img) {
   return { left: x, top: y, width: w, height: h };
 }
 
-// Place 4 pins relative to image bounding box (OpenCV auto-crop suggestion or defaults)
-function initPinsForImage(pairEl, pairState, side) {
-  const sideCol = pairEl.querySelectorAll('.grid > div')[side === 'front' ? 0 : 1];
-  const container = sideCol.querySelector('.perspective-content');
-  const imgEl = container.querySelector('.original-image');
+function rotateActiveImage(degree) {
+  if (!selectedSide.pairId) return;
+  const activePair = pairs.find(p => p.id === selectedSide.pairId);
+  const activeItem = activePair[selectedSide.side];
+  if (!activeItem.originalSrc) return;
   
-  const bounds = getCurrentImageBounds(container, imgEl);
-  const w_c = container.clientWidth;
-  const h_c = container.clientHeight;
-  
-  let detectedCorners = null;
-  if (window.cvReady) {
-    detectedCorners = detectCardCornersOpenCV(imgEl);
-  }
-  
-  const pins = {
-    tl: container.querySelector('[data-pin="tl"]'),
-    tr: container.querySelector('[data-pin="tr"]'),
-    br: container.querySelector('[data-pin="br"]'),
-    bl: container.querySelector('[data-pin="bl"]')
-  };
-  
-  if (detectedCorners) {
-    const mapped = detectedCorners.map(pt => {
-      const px = (pt.x / imgEl.naturalWidth) * bounds.width + bounds.left;
-      const py = (pt.y / imgEl.naturalHeight) * bounds.height + bounds.top;
-      return {
-        x: (px / w_c) * 100,
-        y: (py / h_c) * 100
-      };
-    });
-    
-    pins.tl.style.left = `${mapped[0].x}%`;
-    pins.tl.style.top = `${mapped[0].y}%`;
-    
-    pins.tr.style.left = `${mapped[1].x}%`;
-    pins.tr.style.top = `${mapped[1].y}%`;
-    
-    pins.br.style.left = `${mapped[2].x}%`;
-    pins.br.style.top = `${mapped[2].y}%`;
-    
-    pins.bl.style.left = `${mapped[3].x}%`;
-    pins.bl.style.top = `${mapped[3].y}%`;
-  } else {
-    // Default 15% inset inside image bounding box
-    const insetX = bounds.width * 0.15;
-    const insetY = bounds.height * 0.15;
-    
-    pins.tl.style.left = `${((bounds.left + insetX) / w_c) * 100}%`;
-    pins.tl.style.top = `${((bounds.top + insetY) / h_c) * 100}%`;
-    
-    pins.tr.style.left = `${((bounds.left + bounds.width - insetX) / w_c) * 100}%`;
-    pins.tr.style.top = `${((bounds.top + insetY) / h_c) * 100}%`;
-    
-    pins.br.style.left = `${((bounds.left + bounds.width - insetX) / w_c) * 100}%`;
-    pins.br.style.top = `${((bounds.top + bounds.height - insetY) / h_c) * 100}%`;
-    
-    pins.bl.style.left = `${((bounds.left + insetX) / w_c) * 100}%`;
-    pins.bl.style.top = `${((bounds.top + bounds.height - insetY) / h_c) * 100}%`;
-  }
-  
-  updatePolygonOverlay(pairEl, side);
-  warpCardWithPins(pairState, side);
+  showToast('Xử lý ảnh', 'Đang xoay ảnh...', 'info');
+  rotateImageData(activeItem.originalSrc, degree, (rotatedDataUrl) => {
+    activeItem.originalSrc = rotatedDataUrl;
+    activeItem.pins = null;
+    activeItem.croppedDataUrl = null;
+    loadEditor(activePair, selectedSide.side);
+  });
 }
 
-// Redraw connecting SVG polygon line
-function updatePolygonOverlay(pairEl, side) {
-  const sideCol = pairEl.querySelectorAll('.grid > div')[side === 'front' ? 0 : 1];
-  const container = sideCol.querySelector('.perspective-content');
+function adjustEditorZoom(delta) {
+  if (!selectedSide.pairId) return;
+  const activePair = pairs.find(p => p.id === selectedSide.pairId);
+  const activeItem = activePair[selectedSide.side];
+  const oldZoom = activeItem.zoom || 100;
   
-  const pins = {
-    tl: container.querySelector('[data-pin="tl"]'),
-    tr: container.querySelector('[data-pin="tr"]'),
-    br: container.querySelector('[data-pin="br"]'),
-    bl: container.querySelector('[data-pin="bl"]')
-  };
+  let zoom = oldZoom + delta;
+  zoom = Math.max(100, Math.min(400, zoom));
   
-  const poly = container.querySelector('polygon');
-  const w = container.clientWidth;
-  const h = container.clientHeight;
-  
-  const p_tl = { x: parseFloat(pins.tl.style.left) / 100 * w, y: parseFloat(pins.tl.style.top) / 100 * h };
-  const p_tr = { x: parseFloat(pins.tr.style.left) / 100 * w, y: parseFloat(pins.tr.style.top) / 100 * h };
-  const p_br = { x: parseFloat(pins.br.style.left) / 100 * w, y: parseFloat(pins.br.style.top) / 100 * h };
-  const p_bl = { x: parseFloat(pins.bl.style.left) / 100 * w, y: parseFloat(pins.bl.style.top) / 100 * h };
-  
-  poly.setAttribute('points', `${p_tl.x},${p_tl.y} ${p_tr.x},${p_tr.y} ${p_br.x},${p_br.y} ${p_bl.x},${p_bl.y}`);
+  if (zoom !== oldZoom) {
+    activeItem.zoom = zoom;
+    editorZoomValue.textContent = `${zoom}%`;
+    
+    const container = editorPerspectiveContent;
+    const wrap = container.parentNode;
+    const mouseX = wrap.clientWidth / 2;
+    const mouseY = wrap.clientHeight / 2;
+    const contentX = wrap.scrollLeft + mouseX;
+    const contentY = wrap.scrollTop + mouseY;
+
+    container.style.width = `${zoom}%`;
+    container.style.height = `${zoom}%`;
+    updateEditorPinsUI(activePair, selectedSide.side);
+
+    const ratio = zoom / oldZoom;
+    wrap.scrollLeft = (contentX * ratio) - mouseX;
+    wrap.scrollTop = (contentY * ratio) - mouseY;
+    if (activePair === pairs[0]) {
+      syncPair1ToOthers();
+    }
+  }
 }
 
-// Perform perspective transform warping based on custom pin selections
 function warpCardWithPins(pairState, side) {
-  if (!window.cvReady) return;
-  
-  const pairEl = document.getElementById(pairState.id);
-  const sideCol = pairEl.querySelectorAll('.grid > div')[side === 'front' ? 0 : 1];
-  const container = sideCol.querySelector('.perspective-content');
-  const imgEl = container.querySelector('.original-image');
-  
-  const w_c = container.clientWidth;
-  const h_c = container.clientHeight;
-  const w_n = imgEl.naturalWidth;
-  const h_n = imgEl.naturalHeight;
-  
-  if (!w_n || !h_n) return;
-  
-  const bounds = getCurrentImageBounds(container, imgEl);
-  
-  const pins = {
-    tl: container.querySelector('[data-pin="tl"]'),
-    tr: container.querySelector('[data-pin="tr"]'),
-    br: container.querySelector('[data-pin="br"]'),
-    bl: container.querySelector('[data-pin="bl"]')
-  };
-  
-  function pinToImagePixel(pin) {
-    const px = parseFloat(pin.style.left) / 100 * w_c;
-    const py = parseFloat(pin.style.top) / 100 * h_c;
-    
-    let img_x = (px - bounds.left) / bounds.width * w_n;
-    let img_y = (py - bounds.top) / bounds.height * h_n;
-    
-    img_x = Math.max(0, Math.min(w_n, img_x));
-    img_y = Math.max(0, Math.min(h_n, img_y));
-    
-    return { x: img_x, y: img_y };
-  }
-  
-  const p1 = pinToImagePixel(pins.tl);
-  const p2 = pinToImagePixel(pins.tr);
-  const p3 = pinToImagePixel(pins.br);
-  const p4 = pinToImagePixel(pins.bl);
-  
-  const w1 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-  const w2 = Math.hypot(p3.x - p4.x, p3.y - p4.y);
-  const h1 = Math.hypot(p4.x - p1.x, p4.y - p1.y);
-  const h2 = Math.hypot(p3.x - p2.x, p3.y - p2.y);
-  
-  const maxWidth = Math.max(w1, w2);
-  const maxHeight = Math.max(h1, h2);
-  
-  const isVertical = maxWidth < maxHeight;
-  const targetWidth = isVertical ? 540 : 856;
-  const targetHeight = isVertical ? 856 : 540;
-  
-  try {
-    const cv = window.cv;
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = w_n;
-    tempCanvas.height = h_n;
-    const tempCtx = tempCanvas.getContext('2d');
-    tempCtx.drawImage(imgEl, 0, 0);
-    
-    let src = cv.imread(tempCanvas);
-    
-    let srcCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      p1.x, p1.y,
-      p2.x, p2.y,
-      p3.x, p3.y,
-      p4.x, p4.y
-    ]);
-    
-    let dstCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      0, 0,
-      targetWidth, 0,
-      targetWidth, targetHeight,
-      0, targetHeight
-    ]);
-    
-    let M = cv.getPerspectiveTransform(srcCoords, dstCoords);
-    let warped = new cv.Mat();
-    let dsize = new cv.Size(targetWidth, targetHeight);
-    
-    cv.warpPerspective(src, warped, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-    
-    let canvas = document.createElement('canvas');
-    if (isVertical) {
-      canvas.width = 856;
-      canvas.height = 540;
-      let ctx = canvas.getContext('2d');
-      
-      let tempCanvasWarped = document.createElement('canvas');
-      tempCanvasWarped.width = 540;
-      tempCanvasWarped.height = 856;
-      cv.imshow(tempCanvasWarped, warped);
-      
-      ctx.translate(856 / 2, 540 / 2);
-      ctx.rotate(Math.PI / 2);
-      ctx.drawImage(tempCanvasWarped, -540 / 2, -856 / 2);
-    } else {
-      canvas.width = 856;
-      canvas.height = 540;
-      cv.imshow(canvas, warped);
+  warpCard(pairState, side).then(() => {
+    if (pairState === pairs[0]) {
+      syncPair1ToOthers();
+    }
+    updateLivePreview();
+  });
+}
+
+function warpCard(pairState, side) {
+  return new Promise((resolve) => {
+    const item = pairState[side];
+    if (!item.originalSrc || !item.pins) {
+      resolve();
+      return;
     }
     
-    pairState[side].croppedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
-    updateLivePreview();
-    
-    src.delete();
-    srcCoords.delete();
-    dstCoords.delete();
-    M.delete();
-    warped.delete();
-    
-  } catch (error) {
-    console.error("Warp error:", error);
-  }
+    const img = new Image();
+    img.onload = function() {
+      const w_n = img.naturalWidth;
+      const h_n = img.naturalHeight;
+      if (!w_n || !h_n) {
+        resolve();
+        return;
+      }
+      
+      const p1 = item.pins.tl;
+      const p2 = item.pins.tr;
+      const p3 = item.pins.br;
+      const p4 = item.pins.bl;
+      
+      // Fallback: standard 2D rectangular crop if OpenCV is not loaded
+      if (!window.cvReady) {
+        console.log("Fallback crop running. Pins:", JSON.stringify(item.pins));
+        const xs = [p1.x, p2.x, p3.x, p4.x];
+        const ys = [p1.y, p2.y, p3.y, p4.y];
+        const minX = Math.max(0, Math.min(...xs));
+        const maxX = Math.min(w_n, Math.max(...xs));
+        const minY = Math.max(0, Math.min(...ys));
+        const maxY = Math.min(h_n, Math.max(...ys));
+        
+        const cropW = maxX - minX;
+        const cropH = maxY - minY;
+        console.log("Calculated boundaries:", { minX, maxX, minY, maxY, cropW, cropH, w_n, h_n });
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = 856;
+        canvas.height = 540;
+        const ctx = canvas.getContext('2d');
+        
+        if (cropW > 0 && cropH > 0) {
+          ctx.drawImage(img, minX, minY, cropW, cropH, 0, 0, 856, 540);
+        } else {
+          console.warn("Fallback crop skipped (invalid size), drawing full image.");
+          ctx.drawImage(img, 0, 0, w_n, h_n, 0, 0, 856, 540);
+        }
+        
+        item.croppedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        resolve();
+        return;
+      }
+      
+      // Proceed with OpenCV perspective warp
+      const w1 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const w2 = Math.hypot(p3.x - p4.x, p3.y - p4.y);
+      const h1 = Math.hypot(p4.x - p1.x, p4.y - p1.y);
+      const h2 = Math.hypot(p3.x - p2.x, p3.y - p2.y);
+      
+      const maxWidth = Math.max(w1, w2);
+      const maxHeight = Math.max(h1, h2);
+      
+      const isVertical = maxWidth < maxHeight;
+      const targetWidth = isVertical ? 540 : 856;
+      const targetHeight = isVertical ? 856 : 540;
+      
+      try {
+        const cv = window.cv;
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = w_n;
+        tempCanvas.height = h_n;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(img, 0, 0);
+        
+        let src = cv.imread(tempCanvas);
+        
+        let srcCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
+          p1.x, p1.y,
+          p2.x, p2.y,
+          p3.x, p3.y,
+          p4.x, p4.y
+        ]);
+        
+        let dstCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
+          0, 0,
+          targetWidth, 0,
+          targetWidth, targetHeight,
+          0, targetHeight
+        ]);
+        
+        let M = cv.getPerspectiveTransform(srcCoords, dstCoords);
+        let warped = new cv.Mat();
+        let dsize = new cv.Size(targetWidth, targetHeight);
+        
+        cv.warpPerspective(src, warped, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+        
+        let canvas = document.createElement('canvas');
+        if (isVertical) {
+          canvas.width = 856;
+          canvas.height = 540;
+          let ctx = canvas.getContext('2d');
+          
+          let tempCanvasWarped = document.createElement('canvas');
+          tempCanvasWarped.width = 540;
+          tempCanvasWarped.height = 856;
+          cv.imshow(tempCanvasWarped, warped);
+          
+          ctx.translate(856 / 2, 540 / 2);
+          ctx.rotate(Math.PI / 2);
+          ctx.drawImage(tempCanvasWarped, -540 / 2, -856 / 2);
+        } else {
+          canvas.width = 856;
+          canvas.height = 540;
+          cv.imshow(canvas, warped);
+        }
+        
+        item.croppedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        
+        src.delete();
+        srcCoords.delete();
+        dstCoords.delete();
+        M.delete();
+        warped.delete();
+        
+        resolve();
+      } catch (error) {
+        console.error("Warp error:", error);
+        resolve();
+      }
+    };
+    img.src = item.originalSrc;
+  });
 }
 
-// OpenCV contour suggestion logic: returns 4 detected card corners or null
 function detectCardCornersOpenCV(imgElement) {
   try {
     const cv = window.cv;
@@ -1095,27 +914,6 @@ function detectCardCornersOpenCV(imgElement) {
   return null;
 }
 
-// Rotate the original image data inside offscreen canvas
-function rotateSideImage(pairEl, pairState, side, degree) {
-  const item = pairState[side];
-  if (!item.originalSrc) return;
-  
-  showToast('Xử lý ảnh', 'Đang xoay ảnh...', 'info');
-  rotateImageData(item.originalSrc, degree, (rotatedDataUrl) => {
-    item.originalSrc = rotatedDataUrl;
-    
-    const sideCol = pairEl.querySelectorAll('.grid > div')[side === 'front' ? 0 : 1];
-    const imgEl = sideCol.querySelector('.original-image');
-    imgEl.src = rotatedDataUrl;
-    
-    imgEl.onload = function() {
-      initPinsForImage(pairEl, pairState, side);
-      imgEl.onload = null;
-    };
-  });
-}
-
-// Canvas image rotation helper
 function rotateImageData(srcDataUrl, degree, callback) {
   const img = new Image();
   img.onload = function() {
@@ -1142,81 +940,30 @@ function rotateImageData(srcDataUrl, degree, callback) {
   img.src = srcDataUrl;
 }
 
-// Delete image from a side
-function removeCardImage(pairEl, pairState, side) {
-  const sideCol = pairEl.querySelectorAll('.grid > div')[side === 'front' ? 0 : 1];
-  const dropzone = sideCol.querySelector('.card-dropzone');
-  const cropArea = sideCol.querySelector('.card-crop-area');
-  const controls = sideCol.querySelector('.card-controls');
-  const imgEl = cropArea.querySelector('.original-image');
-
-  if (pairState[side].originalSrc) {
-    pairState[side].originalSrc = null;
+function updatePrintPageStyle() {
+  let styleEl = document.getElementById('print-page-style');
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = 'print-page-style';
+    document.head.appendChild(styleEl);
   }
-  pairState[side].croppedDataUrl = null;
-
-  dropzone.classList.remove('hidden');
-  cropArea.classList.add('hidden');
-  controls.classList.add('hidden');
-  imgEl.src = '';
-
-  updateLivePreview();
-}
-
-// Swap states and UI of front and back columns
-function swapSides(pairState) {
-  const pairEl = document.getElementById(pairState.id);
   
-  const temp = pairState.front;
-  pairState.front = pairState.back;
-  pairState.back = temp;
-  
-  reloadSideUI(pairEl, pairState, 'front');
-  reloadSideUI(pairEl, pairState, 'back');
-  
-  showToast('Đã đổi mặt', 'Hoán đổi thành công Mặt Trước & Mặt Sau.', 'success');
-}
-
-// Delete a card pair
-function deletePair(pairId) {
-  const index = pairs.findIndex(p => p.id === pairId);
-  if (index !== -1) {
-    const pair = pairs[index];
-    pairs.splice(index, 1);
-    const el = document.getElementById(pairId);
-    el.remove();
-
-    if (pairs.length === 0) {
-      emptyState.classList.remove('hidden');
+  const paperSize = paperSizeSelect.value;
+  styleEl.innerHTML = `
+    @media print {
+      @page {
+        size: ${paperSize === 'A5' ? 'A5 landscape' : 'A4 portrait'};
+        margin: 0.8cm;
+      }
     }
-
-    updateLabels();
-    updateLivePreview();
-  }
+  `;
 }
 
-// Clear all card pairs
-function clearAllPairs() {
-  pairs = [];
-  cccdListContainer.querySelectorAll('.cccd-pair-card').forEach(el => el.remove());
-  emptyState.classList.remove('hidden');
-  updateLivePreview();
-}
-
-// Update pair index labels
-function updateLabels() {
-  const labels = cccdListContainer.querySelectorAll('.pair-number-label');
-  labels.forEach((label, idx) => {
-    label.textContent = `Cặp CCCD #${idx + 1}`;
-  });
-}
-
-// Live simulated paper preview rendering
 function updateLivePreview() {
+  updatePrintPageStyle();
   const paperSize = paperSizeSelect.value;
   const paperOrientation = paperSize === 'A5' ? 'landscape' : 'portrait';
   
-  // Dimensions in cm
   const PAPER_DIMENSIONS = {
     A5: { w: 21.0, h: 14.8 },
     A4: { w: 29.7, h: 21.0 }
@@ -1249,49 +996,24 @@ function updateLivePreview() {
 
   simulatedPaper.style.padding = `${marginCm * scale}px`;
 
-  pairs.forEach((pair, idx) => {
-    if (!pair.front.croppedDataUrl && !pair.back.croppedDataUrl) return;
+  enforceLimits();
 
+  pairs.forEach((pair, idx) => {
     const pairWrapper = document.createElement('div');
+    pairWrapper.className = 'print-pair-row';
     pairWrapper.style.display = 'flex';
     pairWrapper.style.justifyContent = 'center';
     pairWrapper.style.alignItems = 'center';
     pairWrapper.style.width = '100%';
     pairWrapper.style.marginBottom = `${rowSpacingCm * scale}px`;
 
-    // Left card box (Front)
-    const frontBox = document.createElement('div');
-    frontBox.className = 'print-card-placeholder flex items-center justify-center overflow-hidden';
-    frontBox.style.width = `${cardWidthCm * scale}px`;
-    frontBox.style.height = `${cardHeightCm * scale}px`;
-    frontBox.style.borderRadius = `${0.1 * scale}px`;
+    const frontBox = createCardSlotElement(pair, 'front', idx + 1, scale, cardWidthCm, cardHeightCm);
     
-    if (pair.front.croppedDataUrl) {
-      frontBox.innerHTML = `<img src="${pair.front.croppedDataUrl}" class="w-full h-full object-cover">`;
-      frontBox.style.borderStyle = 'solid';
-      frontBox.style.borderColor = '#e2e8f0';
-    } else {
-      frontBox.innerHTML = `<span style="font-size: ${Math.max(6, scale * 0.4)}px; color: #aaa;">Mặt trước</span>`;
-    }
-
-    // Spacer
     const spacer = document.createElement('div');
+    spacer.className = 'print-card-spacer';
     spacer.style.width = `${cardSpacingCm * scale}px`;
 
-    // Right card box (Back)
-    const backBox = document.createElement('div');
-    backBox.className = 'print-card-placeholder flex items-center justify-center overflow-hidden';
-    backBox.style.width = `${cardWidthCm * scale}px`;
-    backBox.style.height = `${cardHeightCm * scale}px`;
-    backBox.style.borderRadius = `${0.1 * scale}px`;
-
-    if (pair.back.croppedDataUrl) {
-      backBox.innerHTML = `<img src="${pair.back.croppedDataUrl}" class="w-full h-full object-cover">`;
-      backBox.style.borderStyle = 'solid';
-      backBox.style.borderColor = '#e2e8f0';
-    } else {
-      backBox.innerHTML = `<span style="font-size: ${Math.max(6, scale * 0.4)}px; color: #aaa;">Mặt sau</span>`;
-    }
+    const backBox = createCardSlotElement(pair, 'back', idx + 1, scale, cardWidthCm, cardHeightCm);
 
     pairWrapper.appendChild(frontBox);
     pairWrapper.appendChild(spacer);
@@ -1560,10 +1282,291 @@ async function exportToWord() {
   }
 }
 
-// Add an initial pair to start the screen with one clean blank slot
+function createCardSlotElement(pair, side, index, scale, widthCm, heightCm) {
+  const box = document.createElement('div');
+  box.style.width = `${widthCm * scale}px`;
+  box.style.height = `${heightCm * scale}px`;
+  box.style.borderRadius = `${0.1 * scale}px`;
+  
+  const isSelected = selectedSide.pairId === pair.id && selectedSide.side === side;
+  const hasImage = !!pair[side].croppedDataUrl;
+  const isSyncEnabled = syncPair1Checkbox && syncPair1Checkbox.checked;
+  const isLocked = isSyncEnabled && index > 1;
+  
+  if (hasImage) {
+    box.className = `print-card-placeholder filled-slot ${isSelected ? 'selected' : ''} ${isLocked ? 'opacity-70 cursor-not-allowed' : ''}`;
+    box.innerHTML = `<img src="${pair[side].croppedDataUrl}" class="w-full h-full object-cover">`;
+    if (isLocked) {
+      box.style.position = 'relative';
+      const badge = document.createElement('div');
+      badge.style.position = 'absolute';
+      badge.style.top = '4px';
+      badge.style.right = '4px';
+      badge.style.background = 'rgba(15, 23, 42, 0.8)';
+      badge.style.color = '#818cf8';
+      badge.style.border = '1px solid rgba(129, 140, 248, 0.2)';
+      badge.style.fontSize = '8px';
+      badge.style.fontWeight = 'bold';
+      badge.style.padding = '2px 6px';
+      badge.style.borderRadius = '4px';
+      badge.style.pointerEvents = 'none';
+      badge.innerHTML = '<i class="fa-solid fa-lock text-[8px] mr-1"></i>Đồng bộ';
+      box.appendChild(badge);
+    }
+  } else {
+    box.className = `print-card-placeholder clickable-slot ${isSelected ? 'selected' : ''} ${isLocked ? 'opacity-50 cursor-not-allowed' : ''} flex flex-col items-center justify-center p-2 text-center`;
+    const fontSize = Math.max(7, scale * 0.35);
+    const iconSize = Math.max(10, scale * 0.5);
+    
+    const sideLabel = side === 'front' ? 'Mặt Trước' : 'Mặt Sau';
+    box.innerHTML = `
+      <i class="fa-solid ${isLocked ? 'fa-lock' : 'fa-camera'} mb-1" style="font-size: ${iconSize}px;"></i>
+      <span style="font-size: ${fontSize}px; font-weight: 600;">${sideLabel} #${index}</span>
+      <span style="font-size: ${fontSize * 0.8}px; opacity: 0.7;">${isLocked ? 'Đồng bộ Cặp #1' : 'Click để thêm'}</span>
+    `;
+  }
+  
+  box.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isLocked) {
+      showToast('Đồng bộ đang bật', 'Vui lòng chỉnh sửa Cặp #1. Các ô còn lại sẽ tự động đồng bộ.', 'info');
+      return;
+    }
+    if (pair[side].originalSrc) {
+      selectedSide = { pairId: pair.id, side: side };
+      updateLivePreview();
+      loadEditor(pair, side);
+    } else {
+      activeUploadTarget = { pairState: pair, side: side };
+      slotFileInput.click();
+    }
+  });
+  
+  return box;
+}
+
+function initEditorEvents() {
+  setupEditorPinsDragHandlers();
+  
+  editorSwapBtn.addEventListener('click', () => {
+    if (!selectedSide.pairId) return;
+    const activePair = pairs.find(p => p.id === selectedSide.pairId);
+    if (activePair) {
+      const temp = activePair.front;
+      activePair.front = activePair.back;
+      activePair.back = temp;
+      if (activePair === pairs[0]) {
+        syncPair1ToOthers();
+      }
+      updateLivePreview();
+      loadEditor(activePair, selectedSide.side);
+      showToast('Đã đổi mặt', 'Hoán đổi thành công Mặt Trước & Mặt Sau.', 'success');
+    }
+  });
+
+  editorRotateLeftBtn.addEventListener('click', () => rotateActiveImage(-90));
+  editorRotateRightBtn.addEventListener('click', () => rotateActiveImage(90));
+
+  editorZoomInBtn.addEventListener('click', () => adjustEditorZoom(25));
+  editorZoomOutBtn.addEventListener('click', () => adjustEditorZoom(-25));
+
+  editorRemoveImgBtn.addEventListener('click', () => {
+    if (!selectedSide.pairId) return;
+    const activePair = pairs.find(p => p.id === selectedSide.pairId);
+    if (activePair) {
+      const side = selectedSide.side;
+      if (activePair[side].originalSrc) {
+        try { URL.revokeObjectURL(activePair[side].originalSrc); } catch(err) {}
+      }
+      activePair[side] = { originalSrc: null, croppedDataUrl: null, zoom: 100, pins: null };
+      if (activePair === pairs[0]) {
+        syncPair1ToOthers();
+      }
+      resetEditor();
+      updateLivePreview();
+      showToast('Đã xóa ảnh', 'Đã xóa hình ảnh của mặt này.', 'success');
+    }
+  });
+
+  const editorPerspectiveWrap = editorPerspectiveContent.parentNode;
+  editorPerspectiveWrap.addEventListener('wheel', (e) => {
+    if (!selectedSide.pairId) return;
+    const activePair = pairs.find(p => p.id === selectedSide.pairId);
+    const activeItem = activePair[selectedSide.side];
+    if (!activeItem.originalSrc) return;
+    
+    e.preventDefault();
+
+    const rect = editorPerspectiveWrap.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const oldScrollLeft = editorPerspectiveWrap.scrollLeft;
+    const oldScrollTop = editorPerspectiveWrap.scrollTop;
+    const contentX = oldScrollLeft + mouseX;
+    const contentY = oldScrollTop + mouseY;
+
+    const oldZoom = activeItem.zoom || 100;
+    let zoom = oldZoom;
+    if (e.deltaY < 0) {
+      zoom = Math.min(400, zoom + 15);
+    } else {
+      zoom = Math.max(100, zoom - 15);
+    }
+
+    if (zoom !== oldZoom) {
+      activeItem.zoom = zoom;
+      editorZoomValue.textContent = `${zoom}%`;
+      editorPerspectiveContent.style.width = `${zoom}%`;
+      editorPerspectiveContent.style.height = `${zoom}%`;
+      updateEditorPinsUI(activePair, selectedSide.side);
+
+      const ratio = zoom / oldZoom;
+      editorPerspectiveWrap.scrollLeft = (contentX * ratio) - mouseX;
+      editorPerspectiveWrap.scrollTop = (contentY * ratio) - mouseY;
+      if (activePair === pairs[0]) {
+        syncPair1ToOthers();
+      }
+    }
+  }, { passive: false });
+
+  let isPanning = false;
+  let panStartX = 0, panStartY = 0;
+  let panStartScrollLeft = 0, panStartScrollTop = 0;
+
+  editorPerspectiveWrap.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('pin')) return;
+    if (!selectedSide.pairId) return;
+    const activePair = pairs.find(p => p.id === selectedSide.pairId);
+    if (!activePair[selectedSide.side].originalSrc) return;
+
+    isPanning = true;
+    editorPerspectiveWrap.style.cursor = 'grabbing';
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panStartScrollLeft = editorPerspectiveWrap.scrollLeft;
+    panStartScrollTop = editorPerspectiveWrap.scrollTop;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isPanning) return;
+    const dx = e.clientX - panStartX;
+    const dy = e.clientY - panStartY;
+    editorPerspectiveWrap.scrollLeft = panStartScrollLeft - dx;
+    editorPerspectiveWrap.scrollTop = panStartScrollTop - dy;
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (isPanning) {
+      isPanning = false;
+      if (selectedSide.pairId) {
+        editorPerspectiveWrap.style.cursor = 'grab';
+      } else {
+        editorPerspectiveWrap.style.cursor = 'auto';
+      }
+    }
+  });
+
+  editorPerspectiveWrap.addEventListener('mouseover', (e) => {
+    if (!selectedSide.pairId) return;
+    const activePair = pairs.find(p => p.id === selectedSide.pairId);
+    if (activePair && activePair[selectedSide.side].originalSrc && !e.target.classList.contains('pin') && !isPanning) {
+      editorPerspectiveWrap.style.cursor = 'grab';
+    }
+  });
+}
+
+// Sync and Duplicate logic
+function syncPair1ToOthers(force = false) {
+  if (!syncPair1Checkbox) return;
+  if (!syncPair1Checkbox.checked && !force) return;
+
+  const pair1 = pairs[0];
+  if (!pair1) return;
+
+  if (force && !pair1.front.originalSrc && !pair1.back.originalSrc) {
+    showToast('Cảnh báo', 'Vui lòng tải ảnh và chỉnh sửa Cặp #1 trước khi thực hiện.', 'warning');
+    if (syncPair1Checkbox) syncPair1Checkbox.checked = false;
+    return;
+  }
+
+  for (let i = 1; i < pairs.length; i++) {
+    const destPair = pairs[i];
+
+    // Revoke old URLs if needed
+    if (destPair.front.originalSrc && destPair.front.originalSrc !== pair1.front.originalSrc) {
+      try { URL.revokeObjectURL(destPair.front.originalSrc); } catch (e) {}
+    }
+    if (destPair.back.originalSrc && destPair.back.originalSrc !== pair1.back.originalSrc) {
+      try { URL.revokeObjectURL(destPair.back.originalSrc); } catch (e) {}
+    }
+
+    // Clone front settings
+    destPair.front = {
+      originalSrc: pair1.front.originalSrc,
+      croppedDataUrl: pair1.front.croppedDataUrl,
+      zoom: pair1.front.zoom || 100,
+      pins: pair1.front.pins ? JSON.parse(JSON.stringify(pair1.front.pins)) : null
+    };
+
+    // Clone back settings
+    destPair.back = {
+      originalSrc: pair1.back.originalSrc,
+      croppedDataUrl: pair1.back.croppedDataUrl,
+      zoom: pair1.back.zoom || 100,
+      pins: pair1.back.pins ? JSON.parse(JSON.stringify(pair1.back.pins)) : null
+    };
+  }
+
+  // Reload the editor if editing a non-first pair and sync is active
+  if (selectedSide.pairId && selectedSide.pairId !== pair1.id) {
+    if (syncPair1Checkbox && syncPair1Checkbox.checked) {
+      // Swapping view back to pair1
+      selectedSide = { pairId: pair1.id, side: selectedSide.side };
+      loadEditor(pair1, selectedSide.side);
+    } else {
+      // Just reload the current copy pair with new data
+      const activePair = pairs.find(p => p.id === selectedSide.pairId);
+      if (activePair) {
+        loadEditor(activePair, selectedSide.side);
+      }
+    }
+  }
+
+  updateLivePreview();
+}
+
+// Bind new actions
+if (duplicatePair1Btn) {
+  duplicatePair1Btn.addEventListener('click', () => {
+    syncPair1ToOthers(true);
+    showToast('Thành công', 'Đã sao chép Cặp #1 cho tất cả các ô còn lại!', 'success');
+  });
+}
+
+if (syncPair1Checkbox) {
+  syncPair1Checkbox.addEventListener('change', () => {
+    if (syncPair1Checkbox.checked) {
+      const pair1 = pairs[0];
+      if (pair1 && (pair1.front.originalSrc || pair1.back.originalSrc)) {
+        syncPair1ToOthers(true);
+        showToast('Đồng bộ bật', 'Đang tự động đồng bộ Cặp #1 sang tất cả các ô.', 'success');
+      } else {
+        syncPair1Checkbox.checked = false;
+        showToast('Cảnh báo', 'Vui lòng thêm ảnh vào Cặp #1 trước khi bật tự động đồng bộ.', 'warning');
+      }
+    } else {
+      updateLivePreview();
+    }
+  });
+}
+
+// Initialize layout with correct slot counts and bind editor events
 updatePaperLabel();
-createNewPair();
+enforceLimits();
 updateLivePreview();
+initEditorEvents();
+
 
 // Keep-alive heartbeat and shutdown handling
 function initHeartbeat() {

@@ -165,13 +165,59 @@ body {
   transition: var(--transition);
 }
 
-/* Print View Card Element in Canvas */
+/* Interactive card placeholders on simulated paper */
 .print-card-placeholder {
   aspect-ratio: 1.5857;
-  border: 1px dashed #ccc;
-  background: #fdfdfd;
   position: relative;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.03);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+/* Empty slots */
+.clickable-slot {
+  cursor: pointer;
+  border: 1.5px dashed #cbd5e1;
+  background-color: #f8fafc;
+  color: #64748b;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.clickable-slot:hover {
+  border-color: #6366f1;
+  background-color: #f5f3ff;
+  color: #6366f1;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.08);
+}
+
+/* Filled slots with images */
+.filled-slot {
+  cursor: pointer;
+  border: 1.5px solid #e2e8f0;
+  background-color: #ffffff;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+.filled-slot:hover {
+  border-color: #6366f1;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.08);
+}
+
+/* Selection Ring */
+.clickable-slot.selected,
+.filled-slot.selected {
+  border-color: #6366f1;
+  border-style: solid;
+  border-width: 2px;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+  transform: scale(1.02);
+  z-index: 10;
 }
 
 /* Button effects */
@@ -325,5 +371,144 @@ input[type="file"]::file-selector-button {
   transform: scale(1.4);
   border-color: #dc2626;
   background-color: rgba(220, 38, 38, 0.1);
+}
+
+/* ==========================================================================
+   Print Stylesheet - Optimizes layout for physical document printing
+   ========================================================================== */
+@media print {
+  /* Reset document and background settings */
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide app navigation, control panel, editor, upload zone, toast and header/footers */
+  header,
+  footer,
+  #toast,
+  #opencvStatus,
+  #themeToggle,
+  #globalDropzone,
+  #editorContainer,
+  main > section:first-child,
+  main > section:last-child,
+  .glass-panel > div:first-child,
+  .glass-panel > div:last-child,
+  .glow-effect {
+    display: none !important;
+  }
+
+  /* Strip background color, blur filter, borders, and shadows from wrapping elements */
+  .min-h-screen,
+  main.workspace-grid,
+  main > section,
+  .glass-panel,
+  .preview-container {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    display: block !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Make simulated paper fit page precisely */
+  #simulatedPaper {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    padding: 0.8cm !important; /* Space matching @page margins */
+  }
+
+  /* Style row containers with physical spacing */
+  .print-pair-row {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: center !important;
+    align-items: center !important;
+    width: 100% !important;
+    margin-bottom: 2.0cm !important; /* 2.0 cm vertical margin between rows */
+    page-break-inside: avoid !important;
+  }
+
+  /* Hide completely empty rows from print to save paper/gaps */
+  .print-pair-row:not(:has(.filled-slot)) {
+    display: none !important;
+  }
+
+  /* Style empty card slots (clickable slots) as invisible but taking space */
+  .clickable-slot {
+    visibility: hidden !important;
+    border: none !important;
+    background: transparent !important;
+  }
+
+  /* Force exact physical size (8.56cm x 5.4cm) on print placeholders */
+  .print-card-placeholder {
+    width: 8.56cm !important;
+    height: 5.4cm !important;
+    aspect-ratio: 1.5857 !important;
+    border: 1px solid #d1d5db !important; /* Soft border acts as cut guidelines */
+    border-radius: 0.1cm !important;
+    background-color: #ffffff !important;
+    box-shadow: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Make sure images scale correctly inside printed boxes */
+  .print-card-placeholder img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    display: block !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+
+  /* Spacers between front and back images are exactly 2.0cm wide */
+  .print-card-spacer {
+    width: 2.0cm !important;
+    height: 1px !important;
+    display: block !important;
+    visibility: hidden !important;
+  }
+
+  /* Hide UI locks, text labels or overlays when printing */
+  .print-card-placeholder div,
+  .print-card-placeholder span,
+  .print-card-placeholder i {
+    display: none !important;
+  }
 }
 
